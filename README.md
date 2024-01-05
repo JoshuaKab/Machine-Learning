@@ -1,6 +1,6 @@
-#Machine Learning 
+ # Diabetic Machine Learning Project
 
-Hello Connections, 
+ 
 I am happy to share the project that I've worked upon during my internship at MeriSKILL
 
 My objective here was to diagnostically predict whether a patient has diabetes based on certain 
