@@ -26,27 +26,3 @@ I used few Machine Learning Algorithms for this analysis, DecisionTreeClassifier
 
 here are the metrics for both algorithms:
 
-📌 DecisionTreeClassifier():
-Accuracy Score : 0.75
-Precision: 0.85
-Recall: 0.79
-F1-score: 82
-Confusion Matrix:
-[[84 23]
-[15 32]]
-
----------------------------------
-📌AdaBoost Classifier
-Model performance for Training set
-- Accuracy: 0.8371
-- Precision: 0.8355
-- Recall: 0.8371
-- F1 Score: 0.8360
-
-📌 CatBoostClassifier
-CatBoosting Classifier
-Model performance for Training set
-- Accuracy: 0.9528
-- Precision: 0.9541
-- Recall: 0.9528
-- F1 Score: 0.9521
