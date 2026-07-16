@@ -2,7 +2,7 @@
 
 The company aims to automate the loan qualification process in real time based on the information provided by customers when completing an online loan application form. The objective is to develop a machine learning model that can accurately predict loan approval, thereby accelerating the decision-making process and determining whether an applicant qualifies for a loan.
 
-## Overview
+## Overviews
 
 This notebook presents a comprehensive workflow for analyzing and modeling a loan prediction dataset. The process includes the following key steps:
 
