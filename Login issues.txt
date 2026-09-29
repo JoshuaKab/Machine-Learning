@@ -1,0 +1,580 @@
+Absolutely. Below is a **copy-paste-ready prompt for Google AI Studio** that tells it to investigate the existing implementation and fix the entitlement logic rather than simply patching the UI.
+
+ Google AI Studio Prompt — Fix 1-Day Pro Entitlement Persistence
+
+You are a senior full-stack engineer. Investigate and fix the existing 1-Day Pro subscription/entitlement system in this application.
+
+ ## Business Requirement
+
+ The application has a **1-Day Pro** plan that includes these four features:
+
+ - AI Career Coach
+- ATS Match
+- Tailor CV
+- Cover Letter
+
+ A user must receive access to these features **only after a successful payment has been confirmed**.
+
+ Once payment is successfully confirmed, the user receives **exactly 24 hours of Pro access** starting from the confirmed entitlement start time.
+
+ The user's Pro access must persist for the entire 24-hour period regardless of:
+
+ - Page refresh/reload
+- Logout and login
+- Closing and reopening the browser
+- Starting a new session
+- Using another device/browser while logged into the same account
+
+ The user must NOT be downgraded to Free simply because React state has reset, localStorage is empty, Firestore temporarily reports a default value, or subscription verification is still in progress.
+
+---
+
+ # Current Problem
+
+ The current implementation appears to have an entitlement race condition.
+
+ On page refresh, React initializes something similar to:
+
+```
+const [isPremium, setIsPremium] = useState(false);
+```
+
+ This immediately treats the user as Free before the subscription/entitlement has been verified.
+
+ A Firestore `onSnapshot` listener can then return `isPremium: false` before `/api/user/subscription` finishes verifying the user's actual paid entitlement.
+
+ The application then calls `updateTier()` or equivalent logic, which can overwrite the user's Pro state and/or localStorage.
+
+ Similar problems occur during logout/login, browser restart, and new sessions.
+
+ This must be fixed at the architecture level rather than by simply hiding/showing UI elements.
+
+---
+
+ # Required Entitlement State
+
+ Do NOT treat "not yet verified" as "Free".
+
+ Implement a clear entitlement state such as:
+
+```
+checking
+active
+expired
+```
+
+ or an equivalent implementation.
+
+ For example:
+
+```
+entitlementStatus = "checking";
+```
+
+ Then:
+
+```
+entitlementStatus = "active";
+```
+
+ or:
+
+```
+entitlementStatus = "expired";
+```
+
+ During `checking`:
+
+ - Do not downgrade the user to Free.
+- Do not overwrite a previously known valid entitlement with false.
+- Do not remove Pro access merely because subscription verification has not completed.
+- Show an appropriate loading/checking state where necessary.
+
+ Only after the authoritative subscription/entitlement check confirms that the user has no valid entitlement should the user be treated as Free.
+
+---
+
+ # Server-Side Source of Truth
+
+ The **server-side entitlement must be the source of truth**.
+
+ Do not rely on:
+
+ - React state
+- localStorage
+- session state
+- browser cache
+- Firestore `isPremium: false` defaults
+- client-side timestamps
+- UI state
+
+ as proof that a user is Free or that a 24-hour entitlement has expired.
+
+ The backend should maintain/derive an entitlement containing information equivalent to:
+
+```
+userId
+plan = 1_DAY_PRO
+paymentStatus = successful
+startedAt
+expiresAt
+```
+
+ The exact field names can follow the existing application's architecture.
+
+ The important rule is:
+
+```
+current server time < expiresAt
+AND
+payment was successfully confirmed
+AND
+entitlement belongs to authenticated user
+=
+ACTIVE PRO ACCESS
+```
+
+ If:
+
+```
+current server time >= expiresAt
+```
+
+ then the entitlement is expired and the user should be Free.
+
+---
+
+ # Important: 24-Hour Calculation
+
+ Do NOT calculate the 24-hour period from:
+
+ - page load time
+- login time
+- logout/login time
+- browser session time
+- localStorage creation time
+- React initialization time
+- page refresh time
+
+ The 24-hour period must begin from the **server-confirmed successful payment/entitlement start time**.
+
+ Example:
+
+```
+Payment confirmed:
+2026-09-29 10:00:00
+
+Entitlement expires:
+2026-09-30 10:00:00
+```
+
+ Refreshing the page at 12:00 must NOT reset the timer.
+
+ Logging out at 15:00 and logging back in at 15:30 must NOT reset the timer.
+
+ Opening another device at 18:00 must still show Pro access.
+
+ At 10:00 the following day, the entitlement should expire.
+
+ Use server-side timestamps/time calculations wherever possible.
+
+---
+
+ # Login / Logout Behavior
+
+ When a user logs out and logs back in:
+
+ 1. Authenticate the user.
+2. Retrieve the user's server-side entitlement.
+3. Verify payment status.
+4. Verify that the entitlement has not expired.
+5. Restore the correct entitlement state.
+6. Grant access if the entitlement is still active.
+
+ Do NOT automatically set:
+
+```
+isPremium = false
+```
+
+ simply because authentication state changed.
+
+ Authentication state and subscription entitlement are separate concerns.
+
+---
+
+ # Page Refresh Behavior
+
+ When the page loads:
+
+ 1. Authentication state initializes.
+2. Entitlement state should initially be `checking`.
+3. Do not immediately downgrade the user to Free.
+4. Query the authoritative server-side subscription/entitlement.
+5. Determine whether the 1-Day Pro entitlement is active.
+6. Set the entitlement to `active` or `expired/free`.
+7. Render the appropriate features.
+
+ The sequence should effectively be:
+
+```
+Page Load
+   ↓
+Authentication
+   ↓
+Entitlement = CHECKING
+   ↓
+Verify server-side entitlement
+   ↓
+Payment successful?
+   ↓
+Is current server time before expiresAt?
+   ↓
+YES → ACTIVE PRO
+NO  → FREE/EXPIRED
+```
+
+---
+
+ # localStorage
+
+ If localStorage is currently being used, it may remain as a UI/cache optimization, but it must NOT be the source of truth.
+
+ Never do something equivalent to:
+
+```
+localStorage.setItem("isPremium", false);
+```
+
+ merely because the initial subscription check has not completed.
+
+ Never allow stale client-side data to override a valid server-side entitlement.
+
+ If cached entitlement data exists, it can be used temporarily to improve the UI, but it must eventually be validated against the server.
+
+---
+
+ # Firestore
+
+ Investigate the existing Firestore `onSnapshot` implementation.
+
+ If Firestore contains an `isPremium` field, determine whether it is being used incorrectly as the authoritative subscription state.
+
+ In particular, prevent this sequence:
+
+```
+Firestore says false
+       ↓
+updateTier(false)
+       ↓
+React becomes Free
+       ↓
+localStorage becomes false
+       ↓
+User loses Pro access
+       ↓
+Subscription API later confirms payment
+```
+
+ Instead, subscription verification should be coordinated so that a temporary/default Firestore value cannot incorrectly revoke a valid paid entitlement.
+
+ If Firestore is intended to be the source of subscription data, make sure the entitlement record is updated atomically and contains enough information to determine:
+
+ - payment status
+- plan
+- start time
+- expiration time
+- user identity
+
+ Do not simply rely on a boolean `isPremium` flag for a time-limited entitlement.
+
+---
+
+ # User Identity
+
+ Investigate the existing logic that matches transactions/subscriptions using both `userId` and email.
+
+ The user's stable authenticated `userId` should be the primary identity key wherever possible.
+
+ Do not allow harmless email differences such as casing or formatting to cause a valid paid entitlement to be treated as Free.
+
+ For example:
+
+```
+John@example.com
+john@example.com
+```
+
+ should not cause a valid entitlement lookup to fail if the authenticated `userId` is the same.
+
+ Inspect the payment transaction lookup and subscription API for identity mismatches.
+
+---
+
+ # API Requirements
+
+ Review `/api/user/subscription` or the equivalent subscription endpoint.
+
+ Make sure it:
+
+ 1. Authenticates the current user.
+2. Retrieves the user's actual entitlement.
+3. Verifies successful payment.
+4. Checks the entitlement start and expiration timestamps.
+5. Uses server time.
+6. Returns a clear entitlement state.
+7. Does not incorrectly return Free while verification is still pending.
+8. Does not depend on localStorage or React state.
+
+ A response could conceptually look like:
+
+```
+{
+  "plan": "1_DAY_PRO",
+  "status": "active",
+  "startedAt": "...",
+  "expiresAt": "...",
+  "features": {
+    "aiCareerCoach": true,
+    "atsMatch": true,
+    "tailorCv": true,
+    "coverLetter": true
+  }
+}
+```
+
+ Use the application's existing API/data structures if they already provide equivalent functionality. Do not unnecessarily duplicate the architecture.
+
+---
+
+ # Feature Access
+
+ The following features must all use the same verified entitlement:
+
+```
+AI Career Coach
+ATS Match
+Tailor CV
+Cover Letter
+```
+
+ The client must not independently decide that one feature is available based on a separate local flag.
+
+ Create/use a single entitlement/access check where appropriate.
+
+ Conceptually:
+
+```
+hasActiveProEntitlement()
+```
+
+ should determine whether the user can access the 1-Day Pro features.
+
+ However, the actual enforcement must also happen server-side for protected API operations. Do not rely exclusively on frontend route/UI protection.
+
+---
+
+ # Security Requirement
+
+ A user must NOT be able to gain Pro access by manipulating:
+
+ - localStorage
+- React state
+- browser developer tools
+- client-side timestamps
+- cookies that are not server-validated
+- frontend variables
+
+ Likewise, the user must not lose valid Pro access because of those client-side values.
+
+ Protected AI/CV APIs should validate the user's entitlement server-side before performing the paid operation.
+
+---
+
+ # Do Not Break Existing Payment Logic
+
+ Before changing the implementation:
+
+ 1. Inspect the existing payment flow.
+2. Identify where successful payment is recorded.
+3. Identify how the user is associated with the payment.
+4. Identify where the 24-hour period currently starts.
+5. Identify where `isPremium` is set.
+6. Identify every place that calls `updateTier()` or equivalent.
+7. Identify every place that reads/writes `localStorage` related to premium access.
+8. Identify the Firestore subscription listener.
+9. Identify `/api/user/subscription`.
+10. Identify all protected AI/CV endpoints.
+
+ Then fix the root cause while preserving the existing successful payment flow.
+
+ Do not create duplicate subscription systems unless absolutely necessary.
+
+---
+
+ # Testing Requirements
+
+ After implementing the fix, test all of these scenarios.
+
+ ### Test 1 — Successful Payment
+
+```
+Payment succeeds
+↓
+User receives 1-Day Pro
+↓
+AI Career Coach available
+ATS Match available
+Tailor CV available
+Cover Letter available
+```
+
+ ### Test 2 — Refresh
+
+```
+User has active Pro
+↓
+Refresh page
+↓
+Verify entitlement
+↓
+User remains Pro
+```
+
+ ### Test 3 — Logout/Login
+
+```
+User has active Pro
+↓
+Logout
+↓
+Login again
+↓
+Verify entitlement
+↓
+User remains Pro
+```
+
+ ### Test 4 — Browser Restart
+
+```
+User has active Pro
+↓
+Close browser
+↓
+Reopen browser
+↓
+Login
+↓
+User remains Pro
+```
+
+ ### Test 5 — Different Device
+
+```
+User purchases Pro on Device A
+↓
+User logs into same account on Device B
+↓
+Server verifies entitlement
+↓
+User receives remaining Pro time
+```
+
+ ### Test 6 — Expiration
+
+```
+Payment confirmed at 10:00
+↓
+Expires at 10:00 next day
+↓
+Before expiration = Pro
+At/after expiration = Free
+```
+
+ ### Test 7 — Failed Payment
+
+```
+Payment fails
+↓
+No Pro entitlement
+↓
+All four Pro features remain locked
+```
+
+ ### Test 8 — Client Manipulation
+
+ Try changing:
+
+```
+localStorage
+React state
+client-side premium flags
+```
+
+ The user must NOT gain Pro access without a valid server-side entitlement.
+
+---
+
+ # Expected Final Architecture
+
+ The desired behavior is:
+
+```
+                SUCCESSFUL PAYMENT
+                       ↓
+              SERVER CREATES ENTITLEMENT
+                       ↓
+              startedAt + expiresAt
+                       ↓
+                SERVER = TRUTH
+                       ↓
+          ┌────────────┴────────────┐
+          ↓                         ↓
+     ENTITLEMENT ACTIVE        ENTITLEMENT EXPIRED
+          ↓                         ↓
+       PRO ACCESS                 FREE ACCESS
+          ↓
+ ┌────────┼────────┬─────────────┐
+ ↓        ↓        ↓             ↓
+AI Coach ATS     Tailor CV    Cover Letter
+```
+
+ The critical principle is:
+
+ > **A valid paid 24-hour entitlement must never be revoked simply because the page refreshed, the user logged out/in, the browser restarted, React state reset, localStorage was unavailable, or subscription verification was temporarily incomplete.**
+
+---
+
+ # Implementation Instructions
+
+ Please inspect the existing codebase first and identify the root cause before making changes.
+
+ Then:
+
+ 1. Implement the entitlement-state model.
+2. Make the server-side entitlement the source of truth.
+3. Fix the refresh race condition.
+4. Fix logout/login entitlement restoration.
+5. Fix browser restart behavior.
+6. Fix cross-device entitlement restoration.
+7. Fix user/payment identity matching.
+8. Ensure the 24-hour timer is based on the confirmed payment/entitlement timestamp.
+9. Prevent client-side state from granting or revoking paid access.
+10. Ensure all four 1-Day Pro features use the verified entitlement.
+11. Protect the relevant backend/API endpoints.
+12. Remove or modify any code that incorrectly overwrites a valid entitlement with `false`.
+13. Preserve existing functionality unrelated to this issue.
+
+ After making the changes, provide:
+
+ - A concise explanation of the root cause.
+- The files/components changed.
+- What was changed in each file.
+- Any database/Firestore schema changes required.
+- Any API changes required.
+- How the new entitlement flow works.
+- The tests performed and their results.
+- Any remaining risks or edge cases.
+
+ Do not simply patch the UI. Fix the underlying entitlement and subscription state-management architecture.
